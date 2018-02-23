@@ -82,9 +82,6 @@ static int vhost_blk_start(struct vhost_blk *vb, VirtIODevice *vdev, int fd)
          return -ENOTSUP;
     }
 
-    vb->dev.nvqs = VHOST_BLK_VQ_NUM;
-    vb->dev.vqs = vb->vqs;
-
     ret = vhost_dev_enable_notifiers(&vb->dev, vdev);
     if (ret < 0) {
         return ret;
@@ -131,11 +128,18 @@ static int vhost_blk_start(struct vhost_blk *vb, VirtIODevice *vdev, int fd)
 static void vhost_blk_stop(struct vhost_blk *vb, VirtIODevice *vdev)
 {
     VirtIOBlock *s = to_virtio_blk(vdev);
+    int ret;
+    BusState *qbus = BUS(qdev_get_parent_bus(DEVICE(vdev)));
+    VirtioBusClass *k = VIRTIO_BUS_GET_CLASS(qbus);
 
     if (!s->vhost_started || s->vhost_stopping) {
         return;
     }
     s->vhost_stopping = true;
+    ret = k->set_guest_notifiers(qbus->parent, vb->dev.nvqs, false);
+    if (ret < 0) {
+    	error_report("vhost guest notifier cleanup failed: %d\n", ret);
+    }
     vhost_dev_stop(&vb->dev, vdev);
     vhost_dev_disable_notifiers(&vb->dev, vdev);
 
@@ -154,6 +158,10 @@ static struct vhost_blk *vhost_blk_init(void)
         return NULL;
     }
     vb->vhostfd = -1;
+    vb->dev.nvqs = VHOST_BLK_VQ_NUM;
+    vb->dev.vqs = g_new(struct vhost_virtqueue, vb->dev.nvqs);
+    vb->dev.vq_index = 0;
+
     ret = vhost_dev_init(&vb->dev, vb->vhostfd, "/dev/vhost-blk", false);
     if (ret < 0) {
         error_report("vhost-blk: vhost initialization failed: %s\n",
@@ -706,10 +714,16 @@ static void virtio_blk_set_status(VirtIODevice *vdev, uint8_t status)
 {
     VirtIOBlock *s = VIRTIO_BLK(vdev);
     uint32_t features;
+    int *p = (int *)(s->bs->file->opaque);
+    int fd = *p;
 
-    if (s->bs->use_vhost && !(status & (VIRTIO_CONFIG_S_DRIVER |
-                                    VIRTIO_CONFIG_S_DRIVER_OK))) {
-        vhost_blk_stop(s->vhost_blk, vdev);
+    if (s->bs->use_vhost) {
+	if (status & VIRTIO_CONFIG_S_DRIVER_OK) {
+	        vhost_blk_start(s->vhost_blk, vdev, fd);
+	} else {
+	        vhost_blk_stop(s->vhost_blk, vdev);
+	}
+	return;
     }
 
 #ifdef CONFIG_VIRTIO_BLK_DATA_PLANE

@@ -1052,7 +1052,7 @@ fail_features:
 /* Host notifiers must be enabled at this point. */
 void vhost_dev_stop(struct vhost_dev *hdev, VirtIODevice *vdev)
 {
-    int i;
+    int i, r;
 
     for (i = 0; i < hdev->nvqs; ++i) {
         vhost_virtqueue_stop(hdev,
@@ -1061,6 +1061,15 @@ void vhost_dev_stop(struct vhost_dev *hdev, VirtIODevice *vdev)
                              hdev->vq_index + i);
     }
     vhost_log_sync_range(hdev, 0, ~0x0ull);
+
+    r = ioctl(hdev->control, VHOST_RESET_OWNER, NULL);
+    if (r < 0) {
+        perror("RESET_OWNER:");
+    }
+    r = ioctl(hdev->control, VHOST_SET_OWNER, NULL);
+    if (r < 0) {
+        perror("SET_OWNER:");
+    }
 
     hdev->started = false;
     g_free(hdev->log);
